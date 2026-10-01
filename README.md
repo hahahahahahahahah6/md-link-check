@@ -59,15 +59,20 @@ Options:
 What it checks:
 
 - `[text](url)` links and `![alt](src)` image sources (images are flagged
-  separately as `BROKEN (img)`)
+  separately as `BROKEN (img)`), including URLs with balanced parentheses
+  like `https://en.wikipedia.org/wiki/Python_(programming_language)`
+- Reference-style links: `[text][label]`, `[text][]`, `![alt][label]`
 - `<https://...>` autolinks and bare `https://...` URLs
-- Local links resolve relative to each markdown file; `file.md#anchor` only
-  verifies the file exists. `#anchor`-only links are skipped.
+- Local links resolve relative to each markdown file; `/root/relative` links
+  resolve against the scanned directory, and `%20`-style URL-encoded paths
+  are decoded. `file.md#anchor` only verifies the file exists. `#anchor`-only
+  links are skipped.
 - http(s) links get a `HEAD` request with a 10s timeout, following redirects;
-  status `>= 400` or any network error means broken. Identical URLs are
-  checked once.
-- Links inside code blocks and inline code are ignored — examples in your
-  docs won't trip the checker.
+  when the server answers HEAD with `403`/`405` (common "no HEAD here"
+  responses), one `GET` is tried before calling it broken. Status `>= 400`
+  or any network error means broken. Identical URLs are checked once.
+- Links inside fenced (```/~~~), indented, and inline code are ignored —
+  examples in your docs won't trip the checker.
 
 ## Why not a crawler?
 

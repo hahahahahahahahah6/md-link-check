@@ -21,6 +21,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
         elif self.path == "/missing":
             self.send_response(404)
+        elif self.path == "/head-forbidden":
+            # Some hosts reject HEAD: succeed only on GET.
+            self.send_response(403 if self.command == "HEAD" else 200)
+        elif self.path == "/head-unsupported":
+            self.send_response(405 if self.command == "HEAD" else 200)
         else:
             self.send_response(500)
         self.end_headers()
@@ -155,6 +160,103 @@ class TestMdLinkCheck(unittest.TestCase):
         results, n = md_link_check.scan_files([md], no_network=True)
         self.assertEqual(results[md], [])
         self.assertEqual(n, 0)
+
+    def test_head_403_falls_back_to_get(self):
+        md = self.write("README.md",
+                        f"[x]({self.base}/head-forbidden)\n")
+        results, n = md_link_check.scan_files([md])
+        self.assertEqual(results[md], [])
+        self.assertEqual(n, 1)
+
+    def test_head_405_falls_back_to_get(self):
+        md = self.write("README.md",
+                        f"[x]({self.base}/head-unsupported)\n")
+        results, n = md_link_check.scan_files([md])
+        self.assertEqual(results[md], [])
+        self.assertEqual(n, 1)
+
+    def test_real_404_not_rescued_by_get(self):
+        md = self.write("README.md", f"[x]({self.base}/missing)\n")
+        results, _ = md_link_check.scan_files([md])
+        self.assertEqual(len(results[md]), 1)
+        self.assertEqual(results[md][0]["reason"], "HTTP 404")
+
+    def test_url_with_balanced_parens(self):
+        links = list(md_link_check.extract_links(
+            "[w](https://en.wikipedia.org/wiki/Python_(programming_language))\n"))
+        self.assertEqual(
+            links,
+            [("https://en.wikipedia.org/wiki/Python_(programming_language)",
+              "link")])
+
+    def test_bare_url_trailing_paren_stripped(self):
+        links = dict(md_link_check.extract_links(
+            "see (https://example.com/a) and https://example.com/b_(c).\n"))
+        self.assertIn("https://example.com/a", links)
+        self.assertIn("https://example.com/b_(c)", links)
+
+    def test_root_relative_link_resolves_to_scan_root(self):
+        os.makedirs(os.path.join(self.tmp.name, "docs"))
+        self.write("docs/a.md", "# a\n")
+        md = self.write("README.md", "[a](/docs/a.md)\n")
+        results, n = md_link_check.scan_files([self.tmp.name],
+                                              no_network=True)
+        self.assertEqual(results[md], [])
+        self.assertEqual(n, 1)
+
+    def test_root_relative_missing_flagged(self):
+        md = self.write("README.md", "[a](/docs/nope.md)\n")
+        results, _ = md_link_check.scan_files([self.tmp.name],
+                                              no_network=True)
+        self.assertEqual(len(results[md]), 1)
+
+    def test_percent_encoded_local_path(self):
+        self.write("my file.md", "x\n")
+        md = self.write("README.md", "[f](my%20file.md)\n")
+        results, n = md_link_check.scan_files([md], no_network=True)
+        self.assertEqual(results[md], [])
+        self.assertEqual(n, 1)
+
+    def test_tilde_fence_ignored(self):
+        md = self.write("README.md", "~~~\n[broken](nope.md)\n~~~\n")
+        results, n = md_link_check.scan_files([md], no_network=True)
+        self.assertEqual(results[md], [])
+        self.assertEqual(n, 0)
+
+    def test_indented_code_block_ignored(self):
+        md = self.write("README.md", "\n    [broken](nope.md)\n")
+        results, n = md_link_check.scan_files([md], no_network=True)
+        self.assertEqual(results[md], [])
+        self.assertEqual(n, 0)
+
+    def test_indented_after_paragraph_not_code(self):
+        # A 4-space-indented line directly under paragraph text is a lazy
+        # continuation (CommonMark), so the link is still checked.
+        md = self.write("README.md", "para\n    [gone](nope.md)\n")
+        results, n = md_link_check.scan_files([md], no_network=True)
+        self.assertEqual(len(results[md]), 1)
+        self.assertEqual(n, 1)
+
+    def test_reference_style_links(self):
+        md = self.write(
+            "README.md",
+            "[x][ref] and [y][] and ![i][img]\n"
+            "\n"
+            "[ref]: https://example.com/ok\n"
+            "[y]: other.md\n"
+            "[img]: pic.png\n")
+        self.write("other.md", "# o\n")
+        self.write("pic.png", "x")
+        results, n = md_link_check.scan_files([md], no_network=True)
+        self.assertEqual(results[md], [])
+        # [x][ref] is skipped (network), [y][] and ![i][img] are checked
+        self.assertEqual(n, 2)
+
+    def test_reference_link_case_insensitive(self):
+        md = self.write("README.md", "[x][REF]\n\n[ref]: other.md\n")
+        self.write("other.md", "# o\n")
+        results, _ = md_link_check.scan_files([md], no_network=True)
+        self.assertEqual(results[md], [])
 
 
 if __name__ == "__main__":
